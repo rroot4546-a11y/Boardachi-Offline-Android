@@ -1,6 +1,8 @@
 package com.privateboard.clinical
 
 import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
@@ -16,13 +18,20 @@ private val DarkColors=darkColorScheme(primary=Aqua,onPrimary=Color(0xFF003732),
 fun ClinicalTheme(dark: Boolean, content: @Composable () -> Unit) {
     val view = LocalView.current
     if (!view.isInEditMode) {
-        val window = (view.context as Activity).window
-        window.statusBarColor = if (dark) Night.value.toInt() else Paper.value.toInt()
-        WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !dark
+        view.context.findActivity()?.window?.let { window ->
+            window.statusBarColor = if (dark) Night.value.toInt() else Paper.value.toInt()
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !dark
+        }
     }
     MaterialTheme(
         colorScheme = if (dark) DarkColors else LightColors,
         typography = Typography(),
         content = content
     )
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
