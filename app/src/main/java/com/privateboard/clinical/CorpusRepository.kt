@@ -2,8 +2,12 @@ package com.privateboard.clinical
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.google.gson.Gson
 import com.google.gson.stream.JsonReader
 import com.google.gson.stream.JsonToken
+import java.io.BufferedInputStream
+import java.io.FileNotFoundException
+import java.io.InputStream
 import java.io.InputStreamReader
 import java.util.zip.GZIPInputStream
 
@@ -17,12 +21,24 @@ class CorpusRepository(private val context: Context) {
      * This keeps peak startup memory predictable on older and low-memory Android devices.
      */
     fun loadCorpus(): Corpus {
-        context.assets.open("corpus.json.gz").use { asset ->
-            GZIPInputStream(asset).use { gzip ->
-                JsonReader(InputStreamReader(gzip, Charsets.UTF_8)).use { reader ->
-                    return reader.readCorpus()
-                }
+        openCorpusAsset().use { source ->
+            JsonReader(InputStreamReader(source, Charsets.UTF_8)).use { reader ->
+                return reader.readCorpus()
             }
+        }
+    }
+
+    private fun openCorpusAsset(): InputStream {
+        return try {
+            GZIPInputStream(context.assets.open("corpus.json.gz"))
+        } catch (_: FileNotFoundException) {
+            // Some Android packaging toolchains remove the final .gz extension.
+            val raw = BufferedInputStream(context.assets.open("corpus.json"))
+            raw.mark(2)
+            val first = raw.read()
+            val second = raw.read()
+            raw.reset()
+            if (first == 0x1f && second == 0x8b) GZIPInputStream(raw) else raw
         }
     }
 
@@ -35,6 +51,30 @@ class CorpusRepository(private val context: Context) {
     )
 
     fun setFavorite(id: Int, value: Boolean) = prefs.edit().putBoolean("f$id", value).apply()
+
+    fun savedSession(config: SessionConfig): SessionSnapshot? = savedSession(SessionProgressLogic.identity(config))
+
+    fun savedSession(identity: String): SessionSnapshot? {
+        val encoded = prefs.getString(sessionKey(identity), null) ?: return null
+        return try {
+            Gson().fromJson(encoded, SessionSnapshot::class.java)
+        } catch (_: RuntimeException) {
+            null
+        }
+    }
+
+    /** commit() is deliberate: a close/kill immediately after answering must not lose position. */
+    fun saveSession(snapshot: SessionSnapshot) {
+        prefs.edit().putString(sessionKey(snapshot.identity), Gson().toJson(snapshot)).commit()
+    }
+
+    fun clearSession(identity: String) {
+        prefs.edit().remove(sessionKey(identity)).commit()
+    }
+
+    // Java's hash is not collision-proof, so include an encoded identity to keep scopes independent.
+    private fun sessionKey(identity: String) = "session_" +
+        android.util.Base64.encodeToString(identity.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
 
     fun record(id: Int, correct: Boolean) {
         val old = state(id)
@@ -50,6 +90,8 @@ class CorpusRepository(private val context: Context) {
             .putLong("d$id", System.currentTimeMillis() + interval * 86_400_000L)
             .apply()
     }
+
+    fun attemptCount(id: Int) = prefs.getInt("a$id", 0)
 
     fun isDark() = prefs.getBoolean("dark", false)
     fun setDark(value: Boolean) = prefs.edit().putBoolean("dark", value).apply()

@@ -25,7 +25,7 @@ private fun rich(s: String) = Html.fromHtml(s, Html.FROM_HTML_MODE_COMPACT).toSt
 @Composable
 fun SessionScreen(vm: MainViewModel) {
     val questions = vm.sessionQuestions
-    var index by remember(questions) { mutableIntStateOf(0) }
+    val index = vm.sessionIndex.coerceIn(0, questions.lastIndex.coerceAtLeast(0))
     var selected by remember(index) { mutableStateOf<Set<Int>>(emptySet()) }
     var revealed by remember(index) { mutableStateOf(false) }
     var examAnswers by remember(questions) { mutableStateOf<Map<Int, Set<Int>>>(emptyMap()) }
@@ -37,7 +37,7 @@ fun SessionScreen(vm: MainViewModel) {
         return
     }
     if (finished) {
-        ExamResult(questions, examAnswers) { vm.screen = AppScreen.STATS }
+        ExamResult(questions, examAnswers) { vm.finishSession() }
         return
     }
 
@@ -48,13 +48,21 @@ fun SessionScreen(vm: MainViewModel) {
     val answer: () -> Unit = {
         if (vm.sessionMode == SessionMode.EXAM) {
             examAnswers = examAnswers + (q.id to selected)
-            if (index == questions.lastIndex) finished = true else index++
+            if (q.id !in recorded) {
+                vm.record(q, answerCorrect)
+                recorded = recorded + q.id
+            }
+            if (index == questions.lastIndex) {
+                finished = true
+                vm.markSessionAnswered()
+            } else vm.moveSessionTo(index + 1)
         } else {
             revealed = true
             if (q.id !in recorded) {
                 vm.record(q, answerCorrect)
                 recorded = recorded + q.id
             }
+            vm.markSessionAnswered()
         }
         Unit
     }
@@ -68,7 +76,7 @@ fun SessionScreen(vm: MainViewModel) {
                         Text("Question ${index + 1} of ${questions.size}", fontSize = 12.sp)
                     }
                 },
-                navigationIcon = { IconButton({ vm.screen = AppScreen.HOME }) { Icon(Icons.Outlined.Close, "Close") } },
+                navigationIcon = { IconButton({ vm.persistSession(); vm.screen = AppScreen.HOME }) { Icon(Icons.Outlined.Close, "Close") } },
                 actions = {
                     IconButton({ vm.favorite(q) }) {
                         Icon(if (vm.state(q).favorited) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder, "Bookmark", tint = if (vm.state(q).favorited) Amber else LocalContentColor.current)
@@ -80,8 +88,8 @@ fun SessionScreen(vm: MainViewModel) {
             Surface(shadowElevation = 8.dp) {
                 Row(Modifier.padding(16.dp).navigationBarsPadding(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     if (vm.sessionMode == SessionMode.STUDY && revealed) {
-                        OutlinedButton({ if (index > 0) index-- }, enabled = index > 0) { Icon(Icons.Outlined.ArrowBack, null) }
-                        Button({ if (index == questions.lastIndex) vm.screen = AppScreen.STATS else index++ }, Modifier.weight(1f)) {
+                        OutlinedButton({ if (index > 0) vm.moveSessionTo(index - 1) }, enabled = index > 0) { Icon(Icons.Outlined.ArrowBack, null) }
+                        Button({ if (index == questions.lastIndex) vm.finishSession() else vm.moveSessionTo(index + 1) }, Modifier.weight(1f)) {
                             Text(if (index == questions.lastIndex) "Finish round" else "Next question")
                             Icon(Icons.Outlined.ArrowForward, null)
                         }

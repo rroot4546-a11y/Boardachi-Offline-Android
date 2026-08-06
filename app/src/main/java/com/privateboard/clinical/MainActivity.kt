@@ -32,6 +32,11 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onStop() {
+        vm.persistSession()
+        super.onStop()
+    }
 }
 
 @Composable
