@@ -196,7 +196,7 @@ private fun JsonReader.readQuestion(): Question {
     require(id > 0 && bookId > 0) { "Invalid question record in offline library." }
     return Question(
         id, bookId, sectionId, section, type, difficulty,
-        question, explanation, notes, images, choices
+        question, explanation, notes, images, choices, false, null
     )
 }
 

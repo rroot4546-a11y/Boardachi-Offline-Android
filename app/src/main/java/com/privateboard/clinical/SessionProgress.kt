@@ -5,7 +5,8 @@ data class SessionSnapshot(
     val identity: String,
     val questionIds: List<Int>,
     val index: Int,
-    val mode: SessionMode
+    val mode: SessionMode,
+    val examAnswers: Map<Int, List<Int>> = emptyMap()
 )
 
 data class SessionResumeInfo(val nextQuestion: Int, val totalQuestions: Int)
@@ -38,6 +39,7 @@ object SessionProgressLogic {
         if (snapshot == null || snapshot.identity != identity(config) || snapshot.mode != config.mode) return false
         if (snapshot.questionIds.isEmpty() || snapshot.index !in snapshot.questionIds.indices) return false
         if (snapshot.questionIds.distinct().size != snapshot.questionIds.size) return false
+        if (snapshot.mode == SessionMode.EXAM && snapshot.examAnswers.keys.any { it !in snapshot.questionIds }) return false
         return snapshot.questionIds.all(eligibleIds::contains)
     }
 

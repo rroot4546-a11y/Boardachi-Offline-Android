@@ -31,6 +31,17 @@ class SessionProgressLogicTest {
         assertFalse(SessionProgressLogic.canResume(snapshot, chapter.copy(section = "Renal"), setOf(1, 2)))
     }
 
+    @Test fun examAnswersCanTravelWithResumedSnapshot() {
+        val snapshot = SessionSnapshot(
+            SessionProgressLogic.identity(chapter.copy(mode = SessionMode.EXAM)),
+            listOf(1, 2, 3),
+            2,
+            SessionMode.EXAM,
+            mapOf(1 to listOf(11), 2 to listOf(21, 22))
+        )
+        assertEquals(listOf(21, 22), snapshot.examAnswers[2])
+    }
+
     @Test fun staleOrCompletedSnapshotDoesNotResume() {
         val identity = SessionProgressLogic.identity(chapter)
         assertFalse(SessionProgressLogic.canResume(SessionSnapshot(identity, listOf(1, 2), 2, SessionMode.STUDY), chapter, setOf(1, 2)))

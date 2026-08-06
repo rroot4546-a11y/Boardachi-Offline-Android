@@ -119,6 +119,7 @@ fun ClinicalApp(vm: MainViewModel) {
                 AppScreen.BOOK -> BookScreen(vm)
                 AppScreen.SESSION -> SessionScreen(vm)
                 AppScreen.SETTINGS -> SettingsScreen(vm)
+                AppScreen.CUSTOM_SOURCE -> CustomSourceScreen(vm)
             }
         }
     }

@@ -28,7 +28,7 @@ fun SessionScreen(vm: MainViewModel) {
     val index = vm.sessionIndex.coerceIn(0, questions.lastIndex.coerceAtLeast(0))
     var selected by remember(index) { mutableStateOf<Set<Int>>(emptySet()) }
     var revealed by remember(index) { mutableStateOf(false) }
-    var examAnswers by remember(questions) { mutableStateOf<Map<Int, Set<Int>>>(emptyMap()) }
+    var examAnswers by remember(questions) { mutableStateOf(vm.restoredExamAnswers()) }
     var finished by remember(questions) { mutableStateOf(false) }
     var recorded by remember(questions) { mutableStateOf<Set<Int>>(emptySet()) }
 
@@ -44,10 +44,12 @@ fun SessionScreen(vm: MainViewModel) {
     val q = questions[index]
     val isMulti = q.type == "mcq" || q.choices.count { it.correct } > 1
     val correctIds = q.choices.filter { it.correct }.map { it.id }.toSet()
-    val answerCorrect = selected == correctIds
+    val hasKnownAnswer = correctIds.isNotEmpty()
+    val answerCorrect = hasKnownAnswer && selected == correctIds
     val answer: () -> Unit = {
         if (vm.sessionMode == SessionMode.EXAM) {
             examAnswers = examAnswers + (q.id to selected)
+            vm.saveExamAnswer(q.id, selected)
             if (q.id !in recorded) {
                 vm.record(q, answerCorrect)
                 recorded = recorded + q.id
@@ -94,7 +96,7 @@ fun SessionScreen(vm: MainViewModel) {
                             Icon(Icons.Outlined.ArrowForward, null)
                         }
                     } else {
-                        Button(answer, Modifier.fillMaxWidth(), enabled = selected.isNotEmpty()) {
+                        Button(answer, Modifier.fillMaxWidth(), enabled = selected.isNotEmpty() && hasKnownAnswer) {
                             Text(if (vm.sessionMode == SessionMode.EXAM && index == questions.lastIndex) "Submit exam" else "Lock answer")
                         }
                     }
@@ -113,6 +115,8 @@ fun SessionScreen(vm: MainViewModel) {
                     Pill(q.difficulty); Pill(q.section.ifBlank { "General" }); if (isMulti) Pill("Select all")
                 }
                 Text(rich(q.question), Modifier.padding(top = 18.dp), fontSize = 20.sp, lineHeight = 30.sp, fontWeight = FontWeight.SemiBold)
+                if (!hasKnownAnswer && q.bookId < 0) { Card(Modifier.padding(top=14.dp).fillMaxWidth(),colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.errorContainer)){Column(Modifier.padding(14.dp)){Text("No verified answer",fontWeight=FontWeight.Black);Text("Optional AI may be inaccurate. Nothing is sent unless you tap below.");Button({vm.requestAiAnswer(q)},enabled=vm.aiWorkingQuestionId==null,modifier=Modifier.padding(top=8.dp)){Text(if(vm.aiWorkingQuestionId==q.id)"Requesting…" else "Ask OpenRouter for this question")};vm.aiMessage?.let{Text(it,Modifier.padding(top=6.dp))}}} }
+                if(q.aiGenerated) Text("AI-generated — verify medically${q.aiConfidence?.let{" • confidence ${(it*100).toInt()}%"}?:""}",Modifier.padding(top=10.dp),color=MaterialTheme.colorScheme.error,fontWeight=FontWeight.Bold)
             }
             items(q.choices.sortedBy { it.order }, key = { it.id }) { c ->
                 ChoiceCard(c, c.id in selected, revealed, {

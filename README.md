@@ -1,29 +1,7 @@
-# Clinical Deck (private offline build)
+# Iraqi Board • Internal Medicine
 
-A standalone Android study app for the privately exported Internal Medicine corpus. It has no internet permission, accounts, analytics, or external services.
+The bundled corpus and imported Custom Source PDFs stay on device. PDF text extraction and OCR are fully offline; OCR processes one rendered page at a time.
 
-## Features
+Optional OpenRouter assistance is user initiated per unanswered imported question. Only that custom question and choices are sent to the fixed OpenRouter chat-completions endpoint. The API token is encrypted with Android Keystore and is never bundled, logged, or backed up. AI answers are marked unverified and require medical verification.
 
-- Dashboard, seven-source library, chapter hierarchy, full-corpus local search, and filters
-- Study mode with immediate answer reveal and explanations
-- Exam mode with deferred score
-- Custom session size, source, chapter, and difficulty
-- Bookmarks, local progress/accuracy, and basic expanding-interval review scheduling
-- Light/dark palette and completely offline corpus
-- HTML-rich source text is converted for native display; source question/media references remain in the compressed corpus
-
-## Reproducible build
-
-```bash
-export JAVA_HOME="$HOME/.local/jdk/jdk-17"
-export ANDROID_HOME="$HOME/android-sdk"
-python3 tools/build_corpus.py
-python3 -m unittest -v tests/test_corpus.py
-./gradlew testDebugUnitTest assembleDebug
-```
-
-The corpus builder reads `../export/books/*/all.json` and writes a compact gzip asset. Do not commit or publish the generated corpus or APK.
-
-## Privacy
-
-Application state uses private Android SharedPreferences. The manifest deliberately omits network and backup permissions. Credentials, authentication state, and tokens are neither read by the builder nor bundled into the app.
+Creator: @salah_ahmod
