@@ -43,7 +43,7 @@ class CustomSourceRepository(private val context: Context) {
 
             val questionNative = extractNative(questionPdf, "Questions", onProgress)
             var records = CustomQuestionParser.parseRecords(questionNative, bookId(id), firstQuestionId(id)); var usedOcr = false
-            if (CustomSourceLogic.shouldUseOcr(questionNative, records.size)) {
+            if ((OpenRouterSettings(context).cloudOcrEnabled && OpenRouterSettings(context).hasToken()) || CustomSourceLogic.shouldUseOcr(questionNative, records.size)) {
                 usedOcr = true; records = CustomQuestionParser.parseRecords(extractOcr(questionPdf, "Questions", onProgress), bookId(id), firstQuestionId(id))
             }
             if (records.isEmpty()) error("No supported questions were found. Use numbered questions and A-D choices.")
@@ -52,10 +52,22 @@ class CustomSourceRepository(private val context: Context) {
             answerPdf?.let { pdf ->
                 val native = extractNative(pdf, "Solutions", onProgress)
                 var answers = CustomAnswerParser.parse(native)
-                if (CustomSourceLogic.shouldUseOcr(native, answers.size)) { usedOcr = true; answers = CustomAnswerParser.parse(extractOcr(pdf, "Solutions", onProgress)) }
+                if ((OpenRouterSettings(context).cloudOcrEnabled && OpenRouterSettings(context).hasToken()) || CustomSourceLogic.shouldUseOcr(native, answers.size)) { usedOcr = true; answers = CustomAnswerParser.parse(extractOcr(pdf, "Solutions", onProgress)) }
                 report = CustomAnswerParser.merge(records, answers)
             }
-            val finalQuestions = report.questions.map { it.question }
+            var finalQuestions = report.questions.map { it.question }
+            val aiSettings = OpenRouterSettings(context)
+            if (aiSettings.cloudOcrEnabled && aiSettings.hasToken()) {
+                val pending = AiAnswerLogic.missingAnswers(finalQuestions)
+                val client = OpenRouterClient(aiSettings)
+                pending.forEachIndexed { index, question ->
+                    onProgress(CustomImportProgress(ImportStage.PARSING, index + 1, pending.size, "AI analysis • question ${index + 1} of ${pending.size}"))
+                    try {
+                        val answer = client.answer(question)
+                        finalQuestions = finalQuestions.map { if (it.id == question.id) it.copy(choices = it.choices.mapIndexed { i, c -> c.copy(correct = (('A'.code + i).toChar().toString() in answer.letters)) }, explanation = answer.explanation, aiGenerated = true, aiConfidence = answer.confidence) else it }
+                    } catch (_: Throwable) { }
+                }
+            }
             onProgress(CustomImportProgress(ImportStage.SAVING, message = "Saving ${finalQuestions.size} questions"))
             File(folder, "questions.json").writeText(gson.toJson(finalQuestions))
             val source = CustomSource(id, CustomSourceLogic.safeDisplayName(requestedName, questionName), questionName, System.currentTimeMillis(), finalQuestions.size, usedOcr, answerName, report.verifiedCount, report.missingCount, report.skippedOrUnmatchedEntries)
@@ -80,7 +92,12 @@ class CustomSourceRepository(private val context: Context) {
             val total = renderer.pageCount
             for (i in 0 until total) { onProgress(CustomImportProgress(ImportStage.OCR, i + 1, total, "$label • offline OCR • page ${i + 1} of $total")); renderer.openPage(i).use { page ->
                 val scale = (1600f / page.width).coerceIn(1f, 2.5f); val bitmap = Bitmap.createBitmap((page.width * scale).toInt(), (page.height * scale).toInt(), Bitmap.Config.ARGB_8888)
-                try { bitmap.eraseColor(android.graphics.Color.WHITE); page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY); out.append(Tasks.await(recognizer.process(InputImage.fromBitmap(bitmap, 0))).text).append('\n') } finally { bitmap.recycle() }
+                try {
+                    bitmap.eraseColor(android.graphics.Color.WHITE); page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    val settings = OpenRouterSettings(context)
+                    if (settings.cloudOcrEnabled && settings.hasToken()) out.append(OpenRouterClient(settings).ocr(bitmap)) else out.append(Tasks.await(recognizer.process(InputImage.fromBitmap(bitmap, 0))).text)
+                    out.append('\n')
+                } finally { bitmap.recycle() }
             } }
         } }; return out.toString() } finally { recognizer.close() }
     }

@@ -56,3 +56,35 @@ import androidx.compose.ui.unit.sp
 }
 
 @Composable fun OpenRouterSettingsCard(vm: MainViewModel) { val context = androidx.compose.ui.platform.LocalContext.current; val settings = remember { OpenRouterSettings(context) }; var token by remember { mutableStateOf("") }; var model by remember { mutableStateOf(settings.model) }; var saved by remember { mutableStateOf(settings.hasToken()) }; Card(Modifier.padding(20.dp).fillMaxWidth()) { Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { Text("Optional OpenRouter AI", fontSize = 20.sp, fontWeight = FontWeight.Black); Text("Medical accuracy warning: AI answers can be wrong. Verify medically. Only unanswered custom questions you explicitly submit are sent; imported PDFs and bundled content stay local.", color = MaterialTheme.colorScheme.error); OutlinedTextField(token, { token = it }, Modifier.fillMaxWidth(), label = { Text(if (saved) "API token •••••••• (enter to replace)" else "API token") }, visualTransformation = PasswordVisualTransformation(), singleLine = true); OutlinedTextField(model, { model = it }, Modifier.fillMaxWidth(), label = { Text("Model") }, singleLine = true); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Button({ if (token.isNotBlank()) settings.token = token; settings.model = model; token = ""; saved = settings.hasToken() }) { Text("Save securely") }; OutlinedButton({ settings.token = ""; token = ""; saved = false }) { Text("Delete token") } }; Text("Encrypted with Android Keystore. Network calls happen only after explicit AI actions.", style = MaterialTheme.typography.bodySmall) } } }
+
+@Composable fun AiSettingsCard(vm: MainViewModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val settings = remember { OpenRouterSettings(context) }
+    var provider by remember { mutableStateOf(settings.defaultProvider) }
+    var apiKey by remember { mutableStateOf("") }
+    var model by remember { mutableStateOf(settings.model(provider)) }
+    var baseUrl by remember { mutableStateOf(settings.baseUrl(provider)) }
+    var saved by remember { mutableStateOf(settings.hasToken(provider)) }
+    var googleEmail by remember { mutableStateOf(settings.googleEmail) }
+    val googleLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val account = com.google.android.gms.auth.api.signin.GoogleSignIn.getSignedInAccountFromIntent(result.data)
+        if (!account.isCanceled && account.isSuccessful) { googleEmail = account.result?.email.orEmpty(); settings.googleEmail = googleEmail }
+    }
+    fun select(next: AiProvider) { provider = next; apiKey = ""; model = settings.model(next); baseUrl = settings.baseUrl(next); saved = settings.hasToken(next) }
+    Card(Modifier.padding(20.dp).fillMaxWidth()) { Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("AI providers", fontSize = 20.sp, fontWeight = FontWeight.Black)
+        Text("Nothing is uploaded unless you enable AI OCR or explicitly request analysis. AI output is unverified medical study assistance.", color = MaterialTheme.colorScheme.error)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { AiProvider.values().forEach { p -> FilterChip(provider == p, { select(p) }, label = { Text(p.title, maxLines = 1) }) } }
+        OutlinedTextField(apiKey, { apiKey = it }, Modifier.fillMaxWidth(), label = { Text(if (saved) "API key •••••••• (enter to replace)" else "API key") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
+        if (provider == AiProvider.CUSTOM) OutlinedTextField(baseUrl, { baseUrl = it }, Modifier.fillMaxWidth(), label = { Text("Base URL, e.g. https://host/v1") }, singleLine = true)
+        OutlinedTextField(model, { model = it }, Modifier.fillMaxWidth(), label = { Text("Model (vision model for AI OCR)") }, singleLine = true)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Button({ if (apiKey.isNotBlank()) settings.setApiKey(provider, apiKey); settings.setModel(provider, model); settings.setBaseUrl(provider, baseUrl); settings.defaultProvider = provider; apiKey = ""; saved = settings.hasToken(provider) }) { Text("Save securely") }; OutlinedButton({ settings.setApiKey(provider, ""); apiKey = ""; saved = false }) { Text("Delete key") } }
+        Text("Default provider: ${settings.defaultProvider.title}", style = MaterialTheme.typography.bodySmall)
+        Row(verticalAlignment = Alignment.CenterVertically) { Switch(settings.cloudOcrEnabled, { settings.cloudOcrEnabled = it }); Spacer(Modifier.width(8.dp)); Text("Use AI vision OCR and analyze questions automatically during import") }
+        HorizontalDivider()
+        Text("Google account", fontWeight = FontWeight.Bold)
+        Text("Google sign-in identifies this device account. Gemini and ChatGPT API access still requires the provider key above; no account token is sent to this app.", style = MaterialTheme.typography.bodySmall)
+        Row(verticalAlignment = Alignment.CenterVertically) { Button({ val options = com.google.android.gms.auth.api.signin.GoogleSignInOptions.Builder(com.google.android.gms.auth.api.signin.GoogleSignInOptions.DEFAULT_SIGN_IN).requestEmail().build(); googleLauncher.launch(com.google.android.gms.auth.api.signin.GoogleSignIn.getClient(context, options).signInIntent) }) { Text(if (googleEmail.isBlank()) "Sign in with Google" else "Switch Google account") }; if (googleEmail.isNotBlank()) { Spacer(Modifier.width(8.dp)); Text(googleEmail, style = MaterialTheme.typography.bodySmall) } }
+        Text("Keys are encrypted with Android Keystore. Imported PDFs remain local unless AI OCR is explicitly enabled.", style = MaterialTheme.typography.bodySmall)
+    } }
+}
