@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.sp
 
 @Composable fun CustomSourceScreen(vm: MainViewModel) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val aiSettings = remember { OpenRouterSettings(context) }
     var questionUri by remember { mutableStateOf<Uri?>(null) }; var questionName by remember { mutableStateOf("") }
     var answerUri by remember { mutableStateOf<Uri?>(null) }; var answerName by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }; var remove by remember { mutableStateOf<CustomSource?>(null) }; var confirmAi by remember { mutableStateOf(false) }
@@ -51,7 +52,7 @@ import androidx.compose.ui.unit.sp
         if (missing.isNotEmpty()) item { Card(Modifier.padding(20.dp).fillMaxWidth()) { Column(Modifier.padding(16.dp)) { Text("Unanswered imports", fontWeight = FontWeight.Black); Text("${missing.size} custom questions remain unanswered. Optional AI targets only these questions and may be wrong."); vm.aiBatchProgress?.let { p -> LinearProgressIndicator({ if (p.second == 0) 0f else p.first.toFloat() / p.second }, Modifier.fillMaxWidth()); Text("${p.first} of ${p.second}") }; if (vm.aiBatchProgress == null) OutlinedButton({ confirmAi = true }) { Text("Review AI batch") } else OutlinedButton({ vm.cancelAiBatch() }) { Text("Cancel batch") }; vm.aiMessage?.let { Text(it) } } } }
         items(vm.customSources, key = { it.id }) { source -> ListItem(headlineContent = { Text(source.name, fontWeight = FontWeight.Bold) }, supportingContent = { Column { Text("Questions: ${source.fileName}"); source.answersFileName?.let { Text("Solutions: $it") }; Text("${source.questionCount} questions • ${source.verifiedAnswerCount} answered • ${source.missingAnswerCount} missing${if (source.usedOcr) " • OCR" else ""}") } }, leadingContent = { Icon(Icons.Outlined.Description, null) }, trailingContent = { IconButton({ remove = source }) { Icon(Icons.Outlined.Delete, "Delete") } }) }
     }
-    if (confirmAi) AlertDialog({ confirmAi = false }, title = { Text("Send unanswered questions?") }, text = { Text(AiAnswerLogic.batchWarning(missing.size)) }, confirmButton = { TextButton({ confirmAi = false; vm.requestAiBatch(missing) }) { Text("Send ${missing.size}") } }, dismissButton = { TextButton({ confirmAi = false }) { Text("Cancel") } })
+    if (confirmAi) AlertDialog({ confirmAi = false }, title = { Text("Send unanswered questions?") }, text = { Text(AiAnswerLogic.batchWarning(missing.size, aiSettings.defaultProvider.title)) }, confirmButton = { TextButton({ confirmAi = false; vm.requestAiBatch(missing) }) { Text("Send ${missing.size}") } }, dismissButton = { TextButton({ confirmAi = false }) { Text("Cancel") } })
     remove?.let { source -> AlertDialog({ remove = null }, title = { Text("Delete Custom Source?") }, text = { Text("This removes both privately copied PDFs, imported questions, and local AI answers. This cannot be undone.") }, confirmButton = { TextButton({ vm.deleteCustomSource(source); remove = null }) { Text("Delete") } }, dismissButton = { TextButton({ remove = null }) { Text("Cancel") } }) }
 }
 

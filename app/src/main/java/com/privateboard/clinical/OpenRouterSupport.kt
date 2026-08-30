@@ -21,18 +21,20 @@ data class AiProviderConfig(val provider:AiProvider,val apiKey:String,val model:
 object AiAnswerLogic {
     fun missingAnswers(questions:List<Question>) = questions.filter { q -> q.bookId < 0 && q.choices.isNotEmpty() && q.choices.none { it.correct } }
     fun batchWarning(count:Int, provider:String) = "$count questions will be sent to $provider. Provider charges may apply. AI may be medically wrong."
-    fun parse(json:String, validLetters:Set<String>):AiAnswer? = try {
-        val root=JsonParser.parseString(json).asJsonObject
-        val content=when {
-            root.has("choices") -> root.getAsJsonArray("choices")[0].asJsonObject.getAsJsonObject("message").get("content").asString
-            root.has("content") -> root.getAsJsonArray("content").firstOrNull()?.asJsonObject?.get("text")?.asString.orEmpty()
-            else -> json
-        }.replace("```json","").replace("```","").trim()
-        val obj=JsonParser.parseString(content).asJsonObject; val raw=obj.get("answer") ?: return null
-        val letters=if(raw.isJsonArray) raw.asJsonArray.map{it.asString} else raw.asString.split(Regex("[,\\s]+"))
-        val normalized=letters.map{it.trim().uppercase()}.filter{it.isNotEmpty()}.toSet(); val explanation=obj.get("explanation")?.asString?.trim().orEmpty(); val confidence=obj.get("confidence")?.asDouble?:0.0
-        if(normalized.isEmpty()||!validLetters.containsAll(normalized)||explanation.isEmpty()||confidence !in 0.0..1.0) null else AiAnswer(normalized,explanation,confidence)
-    } catch(_:Throwable){null}
+    fun parse(json:String, validLetters:Set<String>):AiAnswer? {
+        return try {
+            val root=JsonParser.parseString(json).asJsonObject
+            val content=when {
+                root.has("choices") -> root.getAsJsonArray("choices")[0].asJsonObject.getAsJsonObject("message").get("content").asString
+                root.has("content") -> root.getAsJsonArray("content").firstOrNull()?.asJsonObject?.get("text")?.asString.orEmpty()
+                else -> json
+            }.replace("```json","").replace("```","").trim()
+            val obj=JsonParser.parseString(content).asJsonObject; val raw=obj.get("answer") ?: return null
+            val letters=if(raw.isJsonArray) raw.asJsonArray.map{it.asString} else raw.asString.split(Regex("[,\\s]+"))
+            val normalized=letters.map{it.trim().uppercase()}.filter{it.isNotEmpty()}.toSet(); val explanation=obj.get("explanation")?.asString?.trim().orEmpty(); val confidence=obj.get("confidence")?.asDouble?:0.0
+            if(normalized.isEmpty()||!validLetters.containsAll(normalized)||explanation.isEmpty()||confidence !in 0.0..1.0) null else AiAnswer(normalized,explanation,confidence)
+        } catch(_:Throwable){null}
+    }
 }
 
 class OpenRouterSettings(context:Context) {
@@ -44,14 +46,24 @@ class OpenRouterSettings(context:Context) {
     fun setModel(p:AiProvider,value:String)=prefs.edit().putString(key(p,"model"),value.trim().ifBlank{defaultModel(p)}).apply()
     fun baseUrl(p:AiProvider)=prefs.getString(key(p,"url"),"").orEmpty()
     fun setBaseUrl(p:AiProvider,value:String)=prefs.edit().apply{if(value.isBlank())remove(key(p,"url")) else putString(key(p,"url"),value.trim().removeSuffix("/"))}.apply()
-    var defaultProvider:AiProvider get()=runCatching{AiProvider.valueOf(prefs.getString("default_provider",AiProvider.OPENROUTER.name)!!)}.getOrDefault(AiProvider.OPENROUTER) set(v){prefs.edit().putString("default_provider",v.name).apply()}
-    var cloudOcrEnabled:Boolean get()=prefs.getBoolean("cloud_ocr",false) set(v){prefs.edit().putBoolean("cloud_ocr",v).apply()}
-    var googleEmail:String get()=prefs.getString("google_email","").orEmpty() set(v){prefs.edit().putString("google_email",v).apply()}
+    var defaultProvider: AiProvider
+        get() = runCatching { AiProvider.valueOf(prefs.getString("default_provider", AiProvider.OPENROUTER.name)!!) }.getOrDefault(AiProvider.OPENROUTER)
+        set(v) { prefs.edit().putString("default_provider", v.name).apply() }
+    var cloudOcrEnabled: Boolean
+        get() = prefs.getBoolean("cloud_ocr", false)
+        set(v) { prefs.edit().putBoolean("cloud_ocr", v).apply() }
+    var googleEmail: String
+        get() = prefs.getString("google_email", "").orEmpty()
+        set(v) { prefs.edit().putString("google_email", v).apply() }
     fun config(p:AiProvider)=AiProviderConfig(p,apiKey(p),model(p),baseUrl(p))
     fun hasToken(p:AiProvider=defaultProvider)=apiKey(p).isNotBlank()
     private fun defaultModel(p:AiProvider)=when(p){AiProvider.OPENAI->"gpt-4o-mini";AiProvider.GEMINI->"gemini-2.0-flash";AiProvider.ANTHROPIC->"claude-3-5-haiku-latest";AiProvider.OPENROUTER->"openai/gpt-4o-mini";AiProvider.CUSTOM->"vision-model"}
-    var token:String get()=apiKey(AiProvider.OPENROUTER) set(v)=setApiKey(AiProvider.OPENROUTER,v)
-    var model:String get()=model(AiProvider.OPENROUTER) set(v)=setModel(AiProvider.OPENROUTER,v)
+    var token: String
+        get() = apiKey(AiProvider.OPENROUTER)
+        set(v) { setApiKey(AiProvider.OPENROUTER, v) }
+    var model: String
+        get() = model(AiProvider.OPENROUTER)
+        set(v) { setModel(AiProvider.OPENROUTER, v) }
 }
 
 class OpenRouterClient(private val settings:OpenRouterSettings) {
