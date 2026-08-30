@@ -30,14 +30,17 @@ jobs:
           build-tools-version: '34.0.0'
           cmdline-tools-version: 'latest'
 
-      - name: Configure release signing (when secrets are present)
-        if: ${{ secrets.RELEASE_KEYSTORE_B64 != '' }}
+      - name: Configure release signing
         env:
           KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
           STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
         run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "No keystore secret configured; release will be debug-signed."
+            exit 0
+          fi
           echo "$KEYSTORE_B64" | base64 -d > release.keystore
           cat > keystore.properties <<EOF
           storeFile=release.keystore
