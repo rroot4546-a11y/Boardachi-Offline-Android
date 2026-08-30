@@ -95,7 +95,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         } else null
     }
 
-    /** Resumes an exact saved round when possible; otherwise starts a fresh, unseen-first round. */
+    /**
+     * Resumes an exact saved round when possible; otherwise starts a fresh, unseen-first round.
+     * Fresh rounds are deterministic: questions are ordered by id and then by attempt count, so
+     * the same subject always opens in the same order.
+     */
     fun start(config: SessionConfig) {
         val eligible = eligible(config)
         val byId = eligible.associateBy { it.id }
@@ -105,7 +109,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             saved!!.questionIds
         } else {
             SessionProgressLogic.selectNewQuestionIds(
-                eligible.shuffled().map { it.id },
+                eligible.sortedBy { it.id }.map { it.id },
                 eligible.associate { it.id to repo.attemptCount(it.id) },
                 config.count
             )
@@ -175,10 +179,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun eligible(config: SessionConfig) = corpus.questions.asSequence()
+        .filter { it.type != "match" }
         .filter { config.bookId == null || it.bookId == config.bookId }
         .filter { config.section == null || it.section == config.section }
         .filter { config.difficulty == null || it.difficulty == config.difficulty }
         .filter { !config.favoritesOnly || state(it).favorited }
+        .filter { !config.redoIncorrect || (state(it).attempts > 0 && state(it).correct == 0) }
         .toList()
 
     fun searchResults(): List<Question> {

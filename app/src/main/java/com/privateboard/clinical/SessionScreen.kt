@@ -15,9 +15,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 
 private fun rich(s: String) = Html.fromHtml(s, Html.FROM_HTML_MODE_COMPACT).toString().trim()
 
@@ -46,12 +49,30 @@ fun SessionScreen(vm: MainViewModel) {
     val correctIds = q.choices.filter { it.correct }.map { it.id }.toSet()
     val hasKnownAnswer = correctIds.isNotEmpty()
     val answerCorrect = hasKnownAnswer && selected == correctIds
+    val clipboard = LocalClipboardManager.current
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val copyCurrentQuestion: () -> Unit = {
+        val sb = StringBuilder()
+        sb.append(rich(q.question)).append('\n')
+        q.choices.sortedBy { it.order }.forEachIndexed { i, c ->
+            sb.append(('A'.code + i).toChar()).append(". ").append(c.text).append('\n')
+        }
+        val explanation = q.explanation.ifBlank { q.notes }
+        if (explanation.isNotBlank()) sb.append('\n').append(rich(explanation))
+        clipboard.setText(AnnotatedString(sb.toString()))
+        scope.launch {
+            snackbarHostState.currentSnackbarData?.dismiss()
+            snackbarHostState.showSnackbar("Question copied")
+        }
+    }
     val answer: () -> Unit = {
         if (vm.sessionMode == SessionMode.EXAM) {
-            examAnswers = examAnswers + (q.id to selected)
-            vm.saveExamAnswer(q.id, selected)
+            val effective = if (hasKnownAnswer) selected else setOf(Int.MIN_VALUE)
+            examAnswers = examAnswers + (q.id to effective)
+            vm.saveExamAnswer(q.id, effective)
             if (q.id !in recorded) {
-                vm.record(q, answerCorrect)
+                vm.record(q, hasKnownAnswer && answerCorrect)
                 recorded = recorded + q.id
             }
             if (index == questions.lastIndex) {
@@ -70,6 +91,7 @@ fun SessionScreen(vm: MainViewModel) {
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -80,6 +102,9 @@ fun SessionScreen(vm: MainViewModel) {
                 },
                 navigationIcon = { IconButton({ vm.persistSession(); vm.screen = AppScreen.HOME }) { Icon(Icons.Outlined.Close, "Close") } },
                 actions = {
+                    IconButton(copyCurrentQuestion) {
+                        Icon(Icons.Outlined.ContentCopy, "Copy question")
+                    }
                     IconButton({ vm.favorite(q) }) {
                         Icon(if (vm.state(q).favorited) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder, "Bookmark", tint = if (vm.state(q).favorited) Amber else LocalContentColor.current)
                     }
@@ -95,9 +120,20 @@ fun SessionScreen(vm: MainViewModel) {
                             Text(if (index == questions.lastIndex) "Finish round" else "Next question")
                             Icon(Icons.Outlined.ArrowForward, null)
                         }
+                    } else if (vm.sessionMode == SessionMode.STUDY && !hasKnownAnswer) {
+                        Button({ revealed = true; vm.markSessionAnswered() }, Modifier.fillMaxWidth()) {
+                            Text("Reveal explanation")
+                            Icon(Icons.Outlined.Visibility, null)
+                        }
                     } else {
-                        Button(answer, Modifier.fillMaxWidth(), enabled = selected.isNotEmpty() && hasKnownAnswer) {
-                            Text(if (vm.sessionMode == SessionMode.EXAM && index == questions.lastIndex) "Submit exam" else "Lock answer")
+                        Button(answer, Modifier.fillMaxWidth(), enabled = selected.isNotEmpty() || !hasKnownAnswer) {
+                            Text(
+                                when {
+                                    vm.sessionMode == SessionMode.EXAM && index == questions.lastIndex -> "Submit exam"
+                                    !hasKnownAnswer -> "No verified answer — continue"
+                                    else -> "Lock answer"
+                                }
+                            )
                         }
                     }
                 }
@@ -115,6 +151,7 @@ fun SessionScreen(vm: MainViewModel) {
                     Pill(q.difficulty); Pill(q.section.ifBlank { "General" }); if (isMulti) Pill("Select all")
                 }
                 Text(rich(q.question), Modifier.padding(top = 18.dp), fontSize = 20.sp, lineHeight = 30.sp, fontWeight = FontWeight.SemiBold)
+                if (q.images.isNotEmpty()) QuestionImages(q.images)
                 if (!hasKnownAnswer && q.bookId < 0) { Card(Modifier.padding(top=14.dp).fillMaxWidth(),colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.errorContainer)){Column(Modifier.padding(14.dp)){Text("No verified answer",fontWeight=FontWeight.Black);Text("Optional AI may be inaccurate. Nothing is sent unless you tap below.");Button({vm.requestAiAnswer(q)},enabled=vm.aiWorkingQuestionId==null,modifier=Modifier.padding(top=8.dp)){Text(if(vm.aiWorkingQuestionId==q.id)"Requesting…" else "Ask OpenRouter for this question")};vm.aiMessage?.let{Text(it,Modifier.padding(top=6.dp))}}} }
                 if(q.aiGenerated) Text("AI-generated — verify medically${q.aiConfidence?.let{" • confidence ${(it*100).toInt()}%"}?:""}",Modifier.padding(top=10.dp),color=MaterialTheme.colorScheme.error,fontWeight=FontWeight.Bold)
             }
@@ -160,11 +197,12 @@ private fun ChoiceCard(c: Choice, selected: Boolean, revealed: Boolean, onClick:
         Column(Modifier.padding(18.dp)) {
             Text(if (correct) "Correct — strengthen the trace" else "Review the reasoning", fontWeight = FontWeight.Black, fontSize = 18.sp)
             Spacer(Modifier.height(8.dp))
-            val explanation = q.explanation.ifBlank { q.notes }
-            Text(if (explanation.isBlank()) "No explanation was included with this source record." else rich(explanation), lineHeight = 23.sp)
-            if (q.images.isNotEmpty()) {
+            val sourceHtml = q.explanation.ifBlank { q.notes }
+            Text(if (sourceHtml.isBlank()) "No explanation was included with this source record." else rich(sourceHtml), lineHeight = 23.sp)
+            val explanationImages = inlineImageUrls(q.explanation)
+            if (explanationImages.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
-                Text("${q.images.size} source image reference${if (q.images.size > 1) "s" else ""} preserved in the offline record.", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                QuestionImages(explanationImages)
             }
         }
     }

@@ -20,6 +20,7 @@ object SessionProgressLogic {
         append("|count=").append(config.count)
         append("|mode=").append(config.mode.name)
         append("|favorites=").append(config.favoritesOnly)
+        append("|redo=").append(config.redoIncorrect)
     }
 
     /**

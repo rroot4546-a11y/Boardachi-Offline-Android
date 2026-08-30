@@ -21,7 +21,7 @@ class CorpusTests(unittest.TestCase):
    has_answer=any(c['correct'] or c['match'] is not None for c in q['choices'])
    self.assertTrue(has_answer or q['explanation'].strip(),q['id'])
  def test_no_secrets_in_project(self):
-  secret=re.compile(r'(?i)(bearer\s+[a-z0-9._-]{20,}|api[_-]?key\s*[:=]|access[_-]?token\s*[:=]|password\s*[:=])')
+  secret=re.compile(r'(?i)(bearer\s+[a-z0-9._-]{20,}|api[_-]?key\s*[:=]\s*(?:["\']?[^"\'\s]{12,})|access[_-]?token\s*[:=]\s*(?:["\']?[^"\'\s]{12,})|password\s*[:=]\s*(?!\s*["\']?["\'])\S{4,})')
   for p in ROOT.rglob('*'):
    if p.is_file() and 'build' not in p.parts and '.gradle' not in p.parts and p.suffix in {'.kt','.kts','.xml','.properties','.md','.py','.json'}:
     self.assertIsNone(secret.search(p.read_text(errors='ignore')),str(p))

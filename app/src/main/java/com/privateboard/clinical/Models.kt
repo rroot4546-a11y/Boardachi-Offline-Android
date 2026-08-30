@@ -37,5 +37,6 @@ data class SessionConfig(
     val difficulty:String?=null,
     val count:Int=20,
     val mode:SessionMode=SessionMode.STUDY,
-    val favoritesOnly:Boolean=false
+    val favoritesOnly:Boolean=false,
+    val redoIncorrect:Boolean=false
 )
