@@ -1,43 +1,32 @@
 #!/usr/bin/env node
 /**
  * rewrite_corpus.js
- * Reads the ORIGINAL corpus.json.gz and rewrites each long clinical vignette
- * into a SHORT but READABLE clinical question — proper sentences, not abbreviations.
- *
- * BEFORE:
- *   "A 45-year-old woman with hypertension and hyperlipidemia presents to an
- *    urgent care clinic with 10 days of fatigue and a productive cough with
- *    green sputum. On physical examination, she is afebrile with a respiratory
- *    rate of 12 breaths per minute and an oxygen saturation of 99% on room air.
- *    Auscultation of her lungs reveals few scattered wheezes bilaterally.
- *    Which of the following is the appropriate treatment of this patient?"
- *
- * AFTER:
- *   "A 45-year-old woman with hypertension and hyperlipidemia presents with
- *    10 days of productive cough with green sputum. She is afebrile, RR 12,
- *    O2 99%. Lungs: scattered wheezes bilaterally. What is the appropriate treatment?"
- *
- * Strategy: parse the vignette into semantic blocks, then reconstruct as
- * clean short prose — keeping every clinically important detail but stripping
- * filler phrases and redundant normals.
+ * Synthesizes long clinical vignettes into concise, natural, coherent medical questions.
+ * NO robotic "Findings:" or disjointed word-tags.
  */
 
 const fs = require('fs');
 const zlib = require('zlib');
 const path = require('path');
+const { execSync } = require('child_process');
 
 const CORPUS_PATH = path.join(__dirname, '..', 'app', 'src', 'main', 'assets', 'corpus.json.gz');
 
-// ---- helpers ----
 function plain(s) {
   return s.replace(/<[^>]+>/g, '').replace(/&[^;]+;/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function cut(str, max) {
+  if (!str) return '';
+  let s = str.length <= max ? str : str.slice(0, max).replace(/\s+\S*$/, '');
+  s = s.replace(/\s+(?:and|or|with|of|the|on|at|in|to|a|an)\s*$/i, '').trim();
+  return s;
+}
+
 // =========================================================================
-// STEP 1: Extract the QUESTION TAIL (the actual question being asked)
+// STEP 1: Extract Question Lead-in / Tail
 // =========================================================================
 function extractQuestionTail(text) {
-  // Find the last question sentence
   const patterns = [
     /Which of the following[^?]*\?/i,
     /What is the most likely[^?]*\?/i,
@@ -50,19 +39,18 @@ function extractQuestionTail(text) {
     /The most appropriate[^?]*\?/i,
     /The best[^?]*\?/i,
     /Should this patient[^?]*\?/i,
+    /(?:The most likely|The most appropriate|The best|What is the|Which of the following|The next best step|The correct|The diagnosis)[^.:]*:\s*$/i
   ];
 
   for (const p of patterns) {
     const m = text.match(p);
-    if (m && m.index > text.length * 0.4) {
+    if (m && m.index > text.length * 0.35) {
       return { tail: m[0], bodyEnd: m.index };
     }
   }
 
-  // Fallback: last sentence ending with ?
   const lastQ = text.lastIndexOf('?');
-  if (lastQ > text.length * 0.4) {
-    // walk back to find sentence start
+  if (lastQ > text.length * 0.35) {
     let start = lastQ;
     for (let i = lastQ - 1; i >= 0; i--) {
       if (text[i] === '.' || text[i] === '\n') { start = i + 1; break; }
@@ -75,161 +63,162 @@ function extractQuestionTail(text) {
 }
 
 // =========================================================================
-// STEP 2: Extract demographic line (age + sex + comorbidities + presentation)
+// STEP 2: Extract Demographics (Age, Sex, Medical History)
 // =========================================================================
 function extractDemographic(text) {
-  const m = text.match(/(?:A|An)\s+(\d{1,3})\s*-?\s*year\s*-?\s*old\s+(woman|man|female|male|girl|boy|patient)\s*(.*?)(?:presents|comes|is brought|is admitted|is referred|is seen|visits|arrives|was admitted)/is);
+  const m = text.match(/(?:A|An)\s+(\d{1,3})\s*-?\s*year\s*-?\s*old\s+(woman|man|female|male|girl|boy|patient|infant|neonate|child|primigravida|multigravida)(.*?)(?:presents|comes|is brought|is admitted|is referred|is seen|visits|arrives|was admitted|is evaluated|undergoes evaluation)/is);
   if (!m) return null;
 
   const age = m[1];
   const sex = m[2];
   const middle = m[3].trim();
 
-  // Clean the "with X, Y, Z" comorbidities
   let comorbidities = '';
   if (middle) {
     comorbidities = middle
       .replace(/^with\s+/i, '')
-      .replace(/\s*,?\s*who\s+(is|has|was)\s+/i, ', ')
+      .replace(/\s*,?\s*who\s+(?:is|has|was)\s+/i, ', ')
       .replace(/\s+/g, ' ')
       .trim()
       .replace(/,\s*$/, '');
+    if (comorbidities.length > 70) comorbidities = cut(comorbidities, 65);
   }
 
   return { age, sex, comorbidities };
 }
 
 // =========================================================================
-// STEP 3: Extract chief complaint (the "presents with..." part)
+// STEP 3: Extract Chief Complaint
 // =========================================================================
 function extractChiefComplaint(text) {
   const patterns = [
-    /presents?\s+(?:to\s+[^.]*?\s+)?with\s+(?:(?:a|an)\s+)?(?:(\d+)[\s-]+(day|week|month|year)s?\s+(?:history\s+of\s+)?)?(.+?)(?:\.\s|$)/is,
+    /presents?\s+(?:to\s+[^.]*?\s+)?with\s+(?:(?:a|an)\s+)?(?:complaints?\s+of\s+)?(?:(\d+)[\s-]+(day|week|month|year)s?\s+(?:history\s+of\s+)?)?(.+?)(?:\.\s|$)/is,
+    /is evaluated for\s+(?:(?:a|an)\s+)?(?:(\d+)[\s-]+(day|week|month|year)s?\s+(?:history\s+of\s+)?)?(.+?)(?:\.\s|$)/is,
     /(?:complain(?:ing|t|s)\s+of|because of|for evaluation of|for)\s+(.+?)(?:\.\s|$)/is,
   ];
 
   for (const p of patterns) {
     const m = text.match(p);
     if (m) {
-      // For the first pattern with duration
       if (m[1] && m[2]) {
         let complaint = m[3].trim().replace(/\s+/g, ' ').replace(/^of\s+/i, '');
-        if (complaint.length > 100) complaint = complaint.slice(0, 100).replace(/\s+\S*$/, '') + '...';
-        return `${m[1]} ${m[2]}${parseInt(m[1]) > 1 ? 's' : ''} of ${complaint}`;
+        return `${m[1]} ${m[2]}${parseInt(m[1]) > 1 ? 's' : ''} of ${cut(complaint, 80)}`;
       }
-      // complaint without duration
       const idx = m[3] ? 3 : 1;
       let complaint = m[idx].trim().replace(/\s+/g, ' ');
-      if (complaint.length > 120) complaint = complaint.slice(0, 120).replace(/\s+\S*$/, '') + '...';
-      return complaint;
+      return cut(complaint, 90);
     }
   }
   return '';
 }
 
 // =========================================================================
-// STEP 4: Extract key findings (vitals, exam, labs, imaging) — ONLY important ones
+// STEP 4: Extract Exam Findings and Diagnostic Findings (Separated!)
 // =========================================================================
-function extractKeyFindings(text) {
-  const findings = [];
+function extractStructuredFindings(text) {
+  const examFindings = [];
+  const diagnosticFindings = [];
   const seen = new Set();
 
-  function add(s) {
+  function addExam(s) {
     const key = s.slice(0, 20).toLowerCase();
-    if (!seen.has(key)) { seen.add(key); findings.push(s); }
+    if (!seen.has(key)) { seen.add(key); examFindings.push(s); }
   }
 
-  // --- VITALS (only abnormal or clinically relevant) ---
+  function addDiag(s) {
+    const key = s.slice(0, 20).toLowerCase();
+    if (!seen.has(key)) { seen.add(key); diagnosticFindings.push(s); }
+  }
+
+  // --- Vitals ---
   const feverM = text.match(/(?:fever|temperature)\s+(?:of\s+)?([\d.]+)\s*°?\s*[FC]/i);
-  if (feverM) add(`fever ${feverM[1]}°F`);
-  else if (/\bfebrile\b/i.test(text) && !/\bafebrile\b/i.test(text)) add('febrile');
+  if (feverM) addExam(`fever ${feverM[1]}°F`);
+  else if (/\bfebrile\b/i.test(text) && !/\bafebrile\b/i.test(text)) addExam('febrile');
 
   const hrM = text.match(/heart rate\s+(?:of\s+)?(\d+)/i);
-  if (hrM) { const hr = +hrM[1]; if (hr >= 100) add(`HR ${hr}`); else if (hr <= 55) add(`HR ${hr}`); }
+  if (hrM) { const hr = +hrM[1]; if (hr >= 100 || hr <= 55) addExam(`HR ${hr}`); }
 
   const bpM = text.match(/blood pressure\s+(?:of\s+)?(\d+)\/(\d+)/i);
-  if (bpM) { const sys = +bpM[1]; if (sys < 100 || sys >= 160) add(`BP ${bpM[1]}/${bpM[2]}`); }
+  if (bpM) { const sys = +bpM[1]; if (sys < 100 || sys >= 160) addExam(`BP ${bpM[1]}/${bpM[2]}`); }
 
   const rrM = text.match(/respiratory rate\s+(?:of\s+)?(\d+)/i);
-  if (rrM) { const rr = +rrM[1]; if (rr >= 22 || rr <= 10) add(`RR ${rr}`); }
+  if (rrM) { const rr = +rrM[1]; if (rr >= 22 || rr <= 10) addExam(`RR ${rr}`); }
 
   const o2M = text.match(/oxygen saturation\s+(?:of\s+)?(\d+)%?\s*/i);
-  if (o2M) { const o2 = +o2M[1]; if (o2 < 95) add(`O2 ${o2}%`); }
+  if (o2M) { const o2 = +o2M[1]; if (o2 < 95) addExam(`SpO2 ${o2}%`); }
 
-  // --- EXAM FINDINGS (positive/abnormal only) ---
+  // --- Physical Exam Signs ---
   const examPatterns = [
-    [/(crackles|rales)\s*(?:(?:in|at|over)\s+)?([^.,;]{0,40})/i, m => `${m[1]}${m[2] ? ' ' + m[2].trim() : ''}`],
-    [/(wheezes|wheezing)\s*([^.,;]{0,30})/i, m => `${m[1]}${m[2] ? ' ' + m[2].trim() : ''}`],
-    [/(decreased breath sounds|bronchial breathing|egophony|dullness to percussion)\s*([^.,;]{0,30})/i, m => `${m[1]}${m[2] ? ' ' + m[2].trim() : ''}`],
-    [/((new |systolic |diastolic |holosystolic )?(regurgitant )?murmur[^.,;]{0,40})/i, m => m[0].trim()],
+    [/(crackles|rales)\s*(?:(?:in|at|over|on)\s+)?([^.,;]{0,35}?)(?=\s+(?:and|with)|\.|\,|$)/i, m => `${m[1]}${m[2] ? ' ' + m[2].trim() : ''}`],
+    [/(wheezes|wheezing)\s*([^.,;]{0,30}?)(?=\s+(?:and|with)|\.|\,|$)/i, m => `${m[1]}${m[2] ? ' ' + m[2].trim() : ''}`],
+    [/(decreased breath sounds|bronchial breathing|egophony|dullness to percussion)\s*([^.,;]{0,30}?)(?=\s+(?:and|with)|\.|\,|$)/i, m => `${m[1]}${m[2] ? ' ' + m[2].trim() : ''}`],
+    [/((?:new |systolic |diastolic |holosystolic )?(?:regurgitant )?murmur[^.,;]{0,35}?)(?=\s+(?:and|with)|\.|\,|$)/i, m => m[0].trim()],
     [/(S3|S4|gallop|pericardial rub)\b/i, m => m[0]],
     [/(JVD|jugular venous distension|elevated JVP)/i, () => 'JVD'],
-    [/((tender|guarding|rebound|rigidity)\s+[^.,;]{0,35})/i, m => m[0].trim()],
-    [/(hepatomegaly|splenomegaly|lymphadenopathy)\s*([^.,;]{0,25})/i, m => `${m[1]}${m[2] ? ' ' + m[2].trim() : ''}`],
-    [/(edema|clubbing|cyanosis|pallor|icterus|jaundice)\s*([^.,;]{0,25})/i, m => `${m[1]}${m[2] ? ' ' + m[2].trim() : ''}`],
-    [/(weakness|focal deficit|palsy|aphasia|neglect|altered mental status|confusion|lethargy|obtunded)\s*([^.,;]{0,30})/i, m => `${m[1]}${m[2] ? ' ' + m[2].trim() : ''}`],
-    [/(rash|purpura|petechiae|vesicles|ulcer|nodule|white plaques|erythema)\s*([^.,;]{0,30})/i, m => `${m[1]}${m[2] ? ' ' + m[2].trim() : ''}`],
+    [/((?:tender|guarding|rebound|rigidity)\s+[^.,;]{0,30}?)(?=\s+(?:and|with)|\.|\,|$)/i, m => m[0].trim()],
+    [/(hepatomegaly|splenomegaly|lymphadenopathy)\s*([^.,;]{0,25}?)(?=\s+(?:and|with)|\.|\,|$)/i, m => `${m[1]}${m[2] ? ' ' + m[2].trim() : ''}`],
+    [/(edema|clubbing|cyanosis|pallor|icterus|jaundice)\s*([^.,;]{0,25}?)(?=\s+(?:and|with)|\.|\,|$)/i, m => `${m[1]}${m[2] ? ' ' + m[2].trim() : ''}`],
+    [/(weakness|focal deficit|palsy|aphasia|neglect|altered mental status|confusion|lethargy|obtunded)\s*([^.,;]{0,30}?)(?=\s+(?:and|with)|\.|\,|$)/i, m => `${m[1]}${m[2] ? ' ' + m[2].trim() : ''}`],
+    [/(rash|purpura|petechiae|vesicles|ulcer|nodule|white plaques|erythema|dermatitis)\s*([^.,;]{0,30}?)(?=\s+(?:and|with)|\.|\,|$)/i, m => `${m[1]}${m[2] ? ' ' + m[2].trim() : ''}`],
   ];
 
   for (const [rx, fmt] of examPatterns) {
     const m = text.match(rx);
-    if (m && findings.length < 8) {
+    if (m && examFindings.length < 5) {
       let f = fmt(m).replace(/\s+/g, ' ').trim().replace(/[.,;]+$/, '');
-      if (f.length > 50) f = f.slice(0, 50).trimEnd() + '...';
-      add(f);
+      addExam(cut(f, 40));
     }
   }
 
-  // --- KEY LAB / IMAGING results ---
+  // --- Labs & Imaging ---
   const labPatterns = [
-    [/(WBC|white blood cell count)\s*[^.,;]*?(elevated|[\d,]+\s*(?:cells|\/)?[^.,;]{0,20})/i, m => `WBC ${m[2].trim()}`],
+    [/(WBC|white blood cell count)\s*[^.,;]*?(elevated|[\d,]+\s*(?:cells|\/)?[^.,;]{0,20})/i, m => `elevated WBC (${m[2].trim()})`],
     [/(leukocytosis|neutrophilia|lymphocytosis|pancytopenia|eosinophilia)/i, m => m[1]],
     [/(anemia|thrombocytopenia|thrombocytosis)/i, m => m[1]],
     [/(hemoglobin|Hb|Hgb)\s+(?:of\s+)?([\d.]+)/i, m => `Hb ${m[2]}`],
     [/(creatinine)\s+(?:of\s+)?([\d.]+)/i, m => { const v = +m[2]; return v > 1.5 ? `Cr ${m[2]}` : null; }],
     [/(potassium|K\+?)\s+(?:of\s+)?([\d.]+)/i, m => { const v = +m[2]; return (v > 5.5 || v < 3.5) ? `K ${m[2]}` : null; }],
-    [/(sodium|Na\+?)\s+(?:of\s+)?(\d+)/i, m => { const v = +m[2]; return (v < 130 || v > 150) ? `Na ${m[2]}` : null; }],
-    [/(hematuria|proteinuria|pyuria)/i, m => m[1]],
-    [/(hyperkalemia|hyponatremia|hypokalemia|hypernatremia|hypercalcemia|hypocalcemia|metabolic acidosis|metabolic alkalosis|respiratory acidosis)/i, m => m[1]],
-    [/(HIV|CD4)\s*([^.,;]{0,40})/i, m => `${m[1]} ${m[2].trim()}`],
-    [/(TSH|T4|T3)\s+(?:of\s+)?([\d.]+[^.,;]{0,15})/i, m => `${m[1]} ${m[2].trim()}`],
+    [/(hyperkalemia|hyponatremia|hypokalemia|hypernatremia|hypercalcemia|hypocalcemia|metabolic acidosis)/i, m => m[1]],
+    [/(HIV|CD4)\s*([^.,;]{0,35})/i, m => `${m[1]} ${m[2].trim()}`],
   ];
 
   for (const [rx, fmt] of labPatterns) {
     const m = text.match(rx);
-    if (m && findings.length < 10) {
+    if (m && diagnosticFindings.length < 4) {
       const f = fmt(m);
-      if (f) add(f.replace(/\s+/g, ' ').trim().replace(/[.,;]+$/, ''));
+      if (f) addDiag(cut(f.replace(/\s+/g, ' ').trim().replace(/[.,;]+$/, ''), 40));
     }
   }
 
-  // --- IMAGING ---
+  // Imaging
   const imgPatterns = [
-    [/(chest\s*(?:x-?ray|radiograph)|CXR)\s+(?:shows?|demonstrates?|reveals?)\s+([^.]{0,80})/i, m => `CXR: ${m[2].trim()}`],
-    [/(CT\s+(?:scan)?|MRI|ultrasound|echocardiogram|echo)\s+(?:shows?|demonstrates?|reveals?)\s+([^.]{0,80})/i, m => `${m[1].trim()}: ${m[2].trim()}`],
-    [/(ECG|EKG|electrocardiogram)\s+(?:shows?|demonstrates?|reveals?)\s+([^.]{0,80})/i, m => `ECG: ${m[2].trim()}`],
+    [/(chest\s*(?:x-?ray|radiograph)|CXR)\s+(?:shows?|demonstrates?|reveals?)\s+([^.]{0,70})/i, m => `CXR showing ${cut(m[2].trim(), 50)}`],
+    [/(CT\s+(?:scan)?|MRI|ultrasound|echocardiogram|echo)\s+(?:shows?|demonstrates?|reveals?)\s+([^.]{0,70})/i, m => `${m[1].trim()} showing ${cut(m[2].trim(), 50)}`],
+    [/(ECG|EKG|electrocardiogram)\s+(?:shows?|demonstrates?|reveals?)\s+([^.]{0,70})/i, m => `ECG showing ${cut(m[2].trim(), 50)}`],
   ];
 
   for (const [rx, fmt] of imgPatterns) {
     const m = text.match(rx);
-    if (m && findings.length < 10) {
+    if (m && diagnosticFindings.length < 5) {
       let f = fmt(m).replace(/\s+/g, ' ').trim().replace(/[.,;]+$/, '');
-      if (f.length > 65) f = f.slice(0, 65).trimEnd() + '...';
-      add(f);
+      addDiag(f);
     }
   }
 
-  return findings;
+  return { examFindings, diagnosticFindings };
 }
 
 // =========================================================================
-// STEP 5: Clean up the question tail — make it shorter and cleaner
+// STEP 5: Clean Lead-In
 // =========================================================================
 function cleanTail(tail) {
   return tail
-    .replace(/Which of the following is the (?:most )?appropriate /i, 'What is the appropriate ')
+    .replace(/Which of the following is the (?:most )?appropriate next step in (?:the )?(?:management|evaluation|diagnosis|treatment)(?: of this patient)?\?/i, 'What is the most appropriate next step?')
+    .replace(/Which of the following is the (?:most )?appropriate (?:initial )?(?:treatment|therapy|management|intervention)(?: for this patient)?\?/i, 'What is the most appropriate treatment?')
+    .replace(/Which of the following (?:is|are) the (?:most )?likely (?:diagnosis|cause|etiology|pathogen|organism)(?: for this patient)?\?/i, 'What is the most likely diagnosis?')
+    .replace(/Which of the following is the (?:most )?appropriate /i, 'What is the most appropriate ')
     .replace(/Which of the following (?:is|are) the (?:most )?likely /i, 'What is the most likely ')
-    .replace(/Which of the following would be the (?:most )?appropriate /i, 'What is the appropriate ')
+    .replace(/Which of the following would be the (?:most )?appropriate /i, 'What is the most appropriate ')
     .replace(/Which of the following best describes /i, 'What best describes ')
     .replace(/Which of the following is the (?:most )?common /i, 'What is the most common ')
     .replace(/Which of the following is the best /i, 'What is the best ')
@@ -243,115 +232,94 @@ function cleanTail(tail) {
 }
 
 // =========================================================================
-// STEP 6: REWRITE — assemble into a clean, short, readable question
+// STEP 6: Coherent Logical Reconstruction
 // =========================================================================
 function rewriteQuestion(raw) {
   const text = plain(raw);
-  if (text.length <= 180) return text; // already short enough
+  if (text.length <= 160) return text;
 
   const { tail, bodyEnd } = extractQuestionTail(text);
-  if (!tail) return text; // can't find question — keep original
+  if (!tail) return text;
 
   const body = text.slice(0, bodyEnd);
   const demo = extractDemographic(body);
   const complaint = extractChiefComplaint(body);
-  const findings = extractKeyFindings(body);
+  const { examFindings, diagnosticFindings } = extractStructuredFindings(body);
   const cleanedTail = cleanTail(tail);
 
-  // Build the rewritten question
-  const parts = [];
+  // If no demo found, we cannot reliably synthesize a tight vignette without losing structure
+  if (!demo) return text;
 
-  // Demographics
-  if (demo) {
-    let demoLine = `A ${demo.age}-year-old ${demo.sex}`;
-    if (demo.comorbidities) {
-      let comor = demo.comorbidities;
-      if (comor.length > 80) comor = comor.slice(0, 80).replace(/\s+\S*$/, '') + '...';
-      demoLine += ` with ${comor}`;
-    }
-    if (complaint) {
-      demoLine += ` presents with ${complaint}`;
-    }
-    parts.push(demoLine + '.');
-  } else if (complaint) {
-    parts.push(`Patient presents with ${complaint}.`);
+  const sentences = [];
+
+  // Sentence 1: Patient presentation
+  let s1 = `A ${demo.age}-year-old ${demo.sex}`;
+  if (demo.comorbidities) {
+    s1 += ` with ${demo.comorbidities}`;
+  }
+  if (complaint) {
+    s1 += ` presents with ${complaint}`;
+  }
+  sentences.push(s1 + '.');
+
+  // Sentence 2: Clinical findings (fluent prose, no "Findings:")
+  if (examFindings.length > 0 && diagnosticFindings.length > 0) {
+    const examStr = examFindings.join(', ');
+    const diagStr = diagnosticFindings.join(', ');
+    sentences.push(`Exam reveals ${examStr}, and diagnostics show ${diagStr}.`);
+  } else if (examFindings.length > 0) {
+    const examStr = examFindings.join(', ');
+    sentences.push(`Physical exam reveals ${examStr}.`);
+  } else if (diagnosticFindings.length > 0) {
+    const diagStr = diagnosticFindings.join(', ');
+    sentences.push(`Diagnostic evaluation shows ${diagStr}.`);
   }
 
-  // Findings
-  if (findings.length > 0) {
-    const joined = findings.map((f, i) => i === 0 ? f.charAt(0).toUpperCase() + f.slice(1) : f).join(', ');
-    parts.push(`Findings: ${joined}.`);
-  }
+  // Sentence 3: The question lead-in
+  sentences.push(cleanedTail);
 
-  // Question
-  parts.push(cleanedTail);
+  let result = sentences.join(' ').replace(/\.\./g, '.').replace(/\s+/g, ' ').trim();
 
-  let result = parts.join(' ').replace(/\.\./g, '.').replace(/\s+/g, ' ').trim();
-
-  // If result is actually LONGER than original, something went wrong — keep original
-  if (result.length >= text.length * 0.95) return text;
-
-  // If still too long, trim harder
-  if (result.length > 500) {
-    // Trim findings
-    const shortFindings = findings.slice(0, 4);
-    const shortParts = [];
-    if (demo) {
-      let demoLine = `A ${demo.age}-year-old ${demo.sex}`;
-      if (demo.comorbidities) {
-        let comor = demo.comorbidities;
-        if (comor.length > 50) comor = comor.slice(0, 50).replace(/\s+\S*$/, '') + '...';
-        demoLine += ` with ${comor}`;
-      }
-      if (complaint) {
-        let cc = complaint;
-        if (cc.length > 60) cc = cc.slice(0, 60).replace(/\s+\S*$/, '') + '...';
-        demoLine += ` presents with ${cc}`;
-      }
-      shortParts.push(demoLine + '.');
-    }
-    if (shortFindings.length > 0) shortParts.push(shortFindings.join(', ') + '.');
-    shortParts.push(cleanedTail);
-    result = shortParts.join(' ').replace(/\.\./g, '.').replace(/\s+/g, ' ').trim();
-  }
+  // If result is somehow not shorter or broken, keep original
+  if (result.length >= text.length * 0.95 || result.length < 40) return text;
 
   return result;
 }
 
 // =========================================================================
-// MAIN
+// MAIN EXECUTION
 // =========================================================================
-console.log('Reading original corpus.json.gz ...');
-const buf = fs.readFileSync(CORPUS_PATH);
-const json = zlib.gunzipSync(buf).toString('utf8');
-const corpus = JSON.parse(json);
+console.log('Reading base original corpus from commit 2b0e118 ...');
+const rawGz = execSync('git cat-file -p 2b0e1189e26fa1a65fde1000789097930bd06837:app/src/main/assets/corpus.json.gz', { maxBuffer: 50 * 1024 * 1024 });
+const corpus = JSON.parse(zlib.gunzipSync(rawGz).toString('utf8'));
 
-console.log(`Total questions: ${corpus.questions.length}`);
+console.log(`Total questions in corpus: ${corpus.questions.length}`);
 
 let rewritten = 0;
 let unchanged = 0;
 
 for (const q of corpus.questions) {
   const orig = plain(q.question);
-  const newQ = rewriteQuestion(q.question);
-  if (newQ !== orig) {
-    q.question = newQ;
+  const neu = rewriteQuestion(q.question);
+  if (neu !== orig) {
+    q.question = neu.replace(/<[^>]+>/g, ' ').replace(/\s{2,}/g, ' ').trim();
     rewritten++;
   } else {
+    q.question = orig;
     unchanged++;
   }
 }
 
 console.log(`Rewritten: ${rewritten} | Unchanged: ${unchanged}`);
-console.log('\n--- SAMPLES ---');
+console.log('\n--- SAMPLE REWRITES ---');
 for (let i = 0; i < Math.min(8, corpus.questions.length); i++) {
-  console.log(`\n[Q${i}] ${corpus.questions[i].question}`);
+  console.log(`\n[Q${i}]\n${corpus.questions[i].question}`);
 }
 
 const outJson = JSON.stringify(corpus);
 const outGz = zlib.gzipSync(Buffer.from(outJson, 'utf8'), { level: 9 });
 fs.writeFileSync(CORPUS_PATH, outGz);
 
-const origMB = (buf.length / 1048576).toFixed(2);
+const origMB = (rawGz.length / 1048576).toFixed(2);
 const newMB = (outGz.length / 1048576).toFixed(2);
-console.log(`\nDone. ${origMB} MB → ${newMB} MB`);
+console.log(`\nSaved updated corpus: ${origMB} MB → ${newMB} MB`);
