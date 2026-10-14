@@ -7,39 +7,106 @@ private fun plainQ(s: String) =
         .replace(Regex("\\s+"), " ").trim()
 
 private val AGE_SEX = Regex("""(\d{1,3})\s?-\s?year\s?-\s?old\s+(woman|man|female|male|girl|boy)""", RegexOption.IGNORE_CASE)
-private val DURATION = Regex("""(\d+)\s?-\s?(day|week|month|year)s?\s+of\s+([^.,;]+)""", RegexOption.IGNORE_CASE)
-private val VITALS_KEEP = listOf(
-    Regex("""febrile|fever of ([\d.]+)""", RegexOption.IGNORE_CASE),
-    Regex("""(tachy|brady)card\w*|heart rate (\d+)""", RegexOption.IGNORE_CASE),
-    Regex("""hypotens\w*|blood pressure (\d+/\d+)""", RegexOption.IGNORE_CASE),
-    Regex("""(tachypn\w*|respiratory rate (\d+))""", RegexOption.IGNORE_CASE),
-    Regex("""oxygen saturation (\d+)""", RegexOption.IGNORE_CASE),
-    Regex("""hypox\w*""", RegexOption.IGNORE_CASE),
+
+// ---- comorbidity short map ----
+private val COMORBID = listOf(
+    Regex("""hypertension""", RegexOption.IGNORE_CASE) to "HTN",
+    Regex("""hyperlipidemia""", RegexOption.IGNORE_CASE) to "HL",
+    Regex("""diabetes( mellitus)?""", RegexOption.IGNORE_CASE) to "DM",
+    Regex("""coronary artery disease|ischemic heart disease""", RegexOption.IGNORE_CASE) to "CAD",
+    Regex("""heart failure""", RegexOption.IGNORE_CASE) to "HF",
+    Regex("""chronic kidney disease""", RegexOption.IGNORE_CASE) to "CKD",
+    Regex("""\bcopd\b""", RegexOption.IGNORE_CASE) to "COPD",
+    Regex("""\basthma\b""", RegexOption.IGNORE_CASE) to "Asthma",
+    Regex("""atrial fibrillation""", RegexOption.IGNORE_CASE) to "AF",
+    Regex("""\bobesity\b|\bobese\b""", RegexOption.IGNORE_CASE) to "Obese",
+    Regex("""smok\w*""", RegexOption.IGNORE_CASE) to "Smoker",
+    Regex("""\bhiv\b|human immunodeficiency""", RegexOption.IGNORE_CASE) to "HIV",
+    Regex("""syphilis""", RegexOption.IGNORE_CASE) to "Syphilis",
+    Regex("""tuberculosis|\btb\b""", RegexOption.IGNORE_CASE) to "TB",
 )
-private val EXAM_KEEP = listOf(
-    Regex("""(crackles|wheezes|rhonchi|stridor)([^.,;]*)""", RegexOption.IGNORE_CASE),
-    Regex("""(murmur|gallop|rub)([^.,;]*)""", RegexOption.IGNORE_CASE),
-    Regex("""(edema|clubbing|cyanosis|pallor|icterus|jaundice)([^.,;]*)""", RegexOption.IGNORE_CASE),
-    Regex("""(tenderness|guarding|rebound|rigidity)([^.,;]*)""", RegexOption.IGNORE_CASE),
-    Regex("""(lymphadenopathy|hepatomegaly|splenomegaly)([^.,;]*)""", RegexOption.IGNORE_CASE),
-    Regex("""(deficit|weakness|palsy|aphasia|neglect)([^.,;]*)""", RegexOption.IGNORE_CASE),
-    Regex("""(rash|purpura|petechiae|ulcer|nodule)([^.,;]*)""", RegexOption.IGNORE_CASE),
+
+// ---- presentation: keep chief complaint + duration ----
+private val DURATION = Regex("""(\d+)\s?-\s?(day|week|month|year)s?\s+(?:history\s+)?of\s+([^.,;]+)""", RegexOption.IGNORE_CASE)
+
+// ---- vitals: ONLY abnormal survive ----
+private fun abnormalVitals(s: String): List<String> {
+    val out = ArrayList<String>()
+    Regex("""fever of ([\d.]+)""", RegexOption.IGNORE_CASE).find(s)?.let {
+        out += "T ${it.groupValues[1]}°F"
+    } ?: if (Regex("""\bfebrile\b""", RegexOption.IGNORE_CASE).containsMatchIn(s)) out += "Febrile"
+    Regex("""heart rate (\d+)""", RegexOption.IGNORE_CASE).find(s)?.let {
+        val hr = it.groupValues[1].toIntOrNull() ?: 0
+        if (hr >= 100) out += "HR$hr" else if (hr in 1..59) out += "HR$hr"
+    }
+    Regex("""blood pressure (\d+)/(\d+)""", RegexOption.IGNORE_CASE).find(s)?.let {
+        val sys = it.groupValues[1].toIntOrNull() ?: 999
+        if (sys < 100 || sys >= 180) out += "BP ${it.groupValues[1]}/${it.groupValues[2]}"
+    }
+    Regex("""respiratory rate (\d+)""", RegexOption.IGNORE_CASE).find(s)?.let {
+        val rr = it.groupValues[1].toIntOrNull() ?: 0
+        if (rr >= 22 || rr in 1..11) out += "RR$rr"
+    }
+    Regex("""oxygen saturation (\d+)[^.,;]*?(?:and (\d+)[^.,;]*?with ambulation)?""", RegexOption.IGNORE_CASE).find(s)?.let {
+        val o2 = it.groupValues[1].toIntOrNull() ?: 100
+        if (o2 < 95) {
+            val amb = it.groupValues[2]
+            out += if (amb.isNotEmpty()) "O2 $o2%→$amb% ambul" else "O2 $o2% RA"
+        }
+    }
+    return out
+}
+
+// ---- exam / labs / imaging: ONLY positive discriminators ----
+private val KEEP_PATTERNS = listOf(
+    // lung
+    Regex("""(crackles|rales)[^.,;]*""", RegexOption.IGNORE_CASE),
+    Regex("""(wheezes|wheezing)[^.,;]*""", RegexOption.IGNORE_CASE),
+    Regex("""(decreased breath sounds|bronchial breathing|egophony|dullness to percussion)[^.,;]*""", RegexOption.IGNORE_CASE),
+    // cardiac
+    Regex("""((new |systolic |diastolic )?(regurgitant )?murmur[^.,;]*)""", RegexOption.IGNORE_CASE),
+    Regex("""(S3|S4|gallop|rub|JVD|jugular[^.,;]*)""", RegexOption.IGNORE_CASE),
+    // abdomen / nodes / organs
+    Regex("""((tender|guarding|rebound|rigid)[^.,;]{0,40})""", RegexOption.IGNORE_CASE),
+    Regex("""((hepatomegaly|splenomegaly|lymphadenopathy)[^.,;]*)""", RegexOption.IGNORE_CASE),
+    Regex("""((edema|clubbing|cyanosis|pallor|icterus|jaundice)[^.,;]*)""", RegexOption.IGNORE_CASE),
+    // neuro
+    Regex("""((weakness|deficit|palsy|aphasia|neglect|confusion|cachectic|chronically ill)[^.,;]*)""", RegexOption.IGNORE_CASE),
+    // skin / mouth
+    Regex("""((rash|purpura|petechiae|ulcer|nodule|white plaques)[^.,;]*)""", RegexOption.IGNORE_CASE),
+    // discriminating labs
+    Regex("""(white blood cell count[^.,;]*elevated[^.,;]*|WBC[^.,;]*\d[\d,]*[^.,;]*)""", RegexOption.IGNORE_CASE),
+    Regex("""((leukocytosis|neutrophil\w* predominance|lymphocytosis)[^.,;]*)""", RegexOption.IGNORE_CASE),
+    Regex("""((anemia|thrombocyt\w+|hematuria|proteinuria|hyperkalemia|hyponatremia)[^.,;]*)""", RegexOption.IGNORE_CASE),
+    Regex("""((HIV|CD4|viral load)[^.,;]{0,50})""", RegexOption.IGNORE_CASE),
+    // imaging — the money line
+    Regex("""((chest x-?ray|CXR|CT|MRI|ultrasound|echocardiogram|ECG)[^.,;]{0,80})""", RegexOption.IGNORE_CASE),
+    Regex("""((infiltrate|consolidation|effusion|pneumothorax|interstitial[^.,;]*|vegetation|ejection fraction[^.,;]*)[^.,;]*)""", RegexOption.IGNORE_CASE),
 )
-private val COMORBID = mapOf(
-    "hypertension" to "HTN", "hyperlipidemia" to "HL", "diabetes" to "DM",
-    "coronary artery disease" to "CAD", "heart failure" to "HF",
-    "chronic kidney disease" to "CKD", "copd" to "COPD", "asthma" to "Asthma",
-    "atrial fibrillation" to "AF", "obesity" to "Obese", "smoking" to "Smoker",
-    "hiv" to "HIV", "tuberculosis" to "TB",
+
+private val NOISE = listOf(
+    Regex("""basic laboratory testing reveals normal[^.]*\.""", RegexOption.IGNORE_CASE),
+    Regex("""(hematocrit|platelets?|electrolytes?|creatinine|liver function)[^.,;]*normal[^.,;]*""", RegexOption.IGNORE_CASE),
+    Regex("""no pleural effusion""", RegexOption.IGNORE_CASE),
+    Regex("""on physical examination, (he|she) (is|has) (afebrile|comfortable)[^.,;]*""", RegexOption.IGNORE_CASE),
 )
+
 private val QUESTION_TAIL = listOf(
-    Regex("""which of the following is the (most likely diagnosis|diagnosis)[^?]*\?""", RegexOption.IGNORE_CASE) to "→ Dx?",
-    Regex("""which of the following is the appropriate (treatment|management|therapy)[^?]*\?""", RegexOption.IGNORE_CASE) to "→ Rx?",
-    Regex("""what is the (most appropriate )?next step[^?]*\?""", RegexOption.IGNORE_CASE) to "→ Next?",
+    Regex("""most likely diagnosis|diagnosis[^?]{0,40}\?""", RegexOption.IGNORE_CASE) to "→ Most likely Dx?",
+    Regex("""most likely pathogen|causative organism|etiologic agent[^?]{0,40}\?""", RegexOption.IGNORE_CASE) to "→ Pathogen?",
+    Regex("""appropriate (treatment|management|therapy)|treatment of choice[^?]{0,40}\?""", RegexOption.IGNORE_CASE) to "→ Best Rx?",
+    Regex("""most appropriate next step|next step in management[^?]{0,40}\?""", RegexOption.IGNORE_CASE) to "→ Next step?",
+    Regex("""should this patient be admitted[^?]*\?""", RegexOption.IGNORE_CASE) to "→ Admit?",
+    Regex("""should not raise[^?]*\?""", RegexOption.IGNORE_CASE) to "→ NOT suggestive?",
     Regex("""which of the following[^?]*\?""", RegexOption.IGNORE_CASE) to "→ ?",
 )
 
-/** Rule-based stem condenser: long vignette → ultra-short stem. Offline, zero deps. */
+/**
+ * Professional condenser: long vignette → short stem WITHOUT losing the core idea.
+ * Rules: keep age/sex + comorbidities + chief complaint + ONLY abnormal vitals +
+ * positive exam/labs/imaging discriminators + question intent. Drop normal values,
+ * normal labs, and filler phrasing.
+ */
 fun condenseStem(raw: String): String {
     val s = plainQ(raw)
     if (s.length <= 140) return s
@@ -47,14 +114,11 @@ fun condenseStem(raw: String): String {
 
     AGE_SEX.find(s)?.let {
         val age = it.groupValues[1]
-        val sex = if (it.groupValues[2].lowercase().startsWith("w") ||
-            it.groupValues[2].equals("female", true) ||
-            it.groupValues[2].equals("girl", true)) "F" else "M"
-        out += "$age$sex"
+        val w = it.groupValues[2].lowercase()
+        out += "$age" + if (w.startsWith("w") || w == "female" || w == "girl") "F" else "M"
     }
 
-    val lower = s.lowercase()
-    val comor = COMORBID.filterKeys { lower.contains(it) }.values.distinct().take(4)
+    val comor = COMORBID.filter { (rx, _) -> rx.containsMatchIn(s) }.map { it.second }.distinct().take(5)
     if (comor.isNotEmpty()) out += comor.joinToString("+")
 
     DURATION.find(s)?.let {
@@ -62,26 +126,22 @@ fun condenseStem(raw: String): String {
             'd' -> "d"; 'w' -> "w"; 'm' -> "mo"; else -> "y"
         }
         var complaint = it.groupValues[3].trim()
-        if (complaint.length > 60) complaint = complaint.take(60).trimEnd() + "…"
+            .replace(Regex("""^(a|an|the)\s+""", RegexOption.IGNORE_CASE), "")
+        if (complaint.length > 70) complaint = complaint.take(70).trimEnd() + "…"
         out += "${it.groupValues[1]}$unit $complaint"
-    } ?: run {
-        // fallback: first sentence trimmed
-        val first = s.substringBefore(". ")
-        out += if (first.length > 90) first.take(90).trimEnd() + "…" else first
     }
 
-    for (rx in VITALS_KEEP) {
-        rx.find(s)?.let {
-            var hit = it.value.trim()
-            if (hit.length > 45) hit = hit.take(45).trimEnd() + "…"
-            if (out.none { e -> e.contains(hit.take(12), true) }) out += hit
-        }
-    }
-    for (rx in EXAM_KEEP) {
-        rx.find(s)?.let {
-            var hit = it.value.trim()
-            if (hit.length > 45) hit = hit.take(45).trimEnd() + "…"
-            if (out.none { e -> e.contains(hit.take(12), true) }) out += hit
+    out += abnormalVitals(s)
+
+    val seen = HashSet<String>()
+    for (rx in KEEP_PATTERNS) {
+        rx.findAll(s).forEach { m ->
+            var hit = m.value.trim().trimEnd('.', ',', ';')
+                .replace(Regex("""^(On lung examination, |Chest radiography demonstrates |Basic laboratory[^,]*, )""", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("""\s+"""), " ")
+            if (hit.length > 65) hit = hit.take(65).trimEnd() + "…"
+            val key = hit.take(14).lowercase()
+            if (hit.length >= 4 && seen.add(key) && out.size < 9) out += hit
         }
     }
 
@@ -93,7 +153,6 @@ fun condenseStem(raw: String): String {
     return out.joinToString(" • ")
 }
 
-/** Short line for search results / lists: first 110 chars of condensed stem. */
 fun shortLine(raw: String): String {
     val c = condenseStem(raw)
     return if (c.length <= 110) c else c.take(110).trimEnd() + "…"
