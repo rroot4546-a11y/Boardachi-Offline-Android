@@ -34,7 +34,9 @@ private fun abnormalVitals(s: String): List<String> {
     val out = ArrayList<String>()
     Regex("""fever of ([\d.]+)""", RegexOption.IGNORE_CASE).find(s)?.let {
         out += "T ${it.groupValues[1]}°F"
-    } ?: if (Regex("""\bfebrile\b""", RegexOption.IGNORE_CASE).containsMatchIn(s)) out += "Febrile"
+    } ?: run {
+        if (Regex("""\bfebrile\b""", RegexOption.IGNORE_CASE).containsMatchIn(s)) out += "Febrile"
+    }
     Regex("""heart rate (\d+)""", RegexOption.IGNORE_CASE).find(s)?.let {
         val hr = it.groupValues[1].toIntOrNull() ?: 0
         if (hr >= 100) out += "HR$hr" else if (hr in 1..59) out += "HR$hr"
