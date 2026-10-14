@@ -151,18 +151,6 @@ fun SessionScreen(vm: MainViewModel) {
                     Pill(q.difficulty); Pill(q.section.ifBlank { "General" }); if (isMulti) Pill("Select all")
                 }
                 Text(rich(q.question), Modifier.padding(top = 18.dp), fontSize = 20.sp, lineHeight = 30.sp, fontWeight = FontWeight.SemiBold)
-                var showFull by remember(index) { mutableStateOf(false) }
-                if (!showFull) {
-                    Text(condenseStem(q.question), Modifier.padding(top = 18.dp), fontSize = 19.sp, lineHeight = 27.sp, fontWeight = FontWeight.Bold)
-                    TextButton({ showFull = true }, contentPadding = PaddingValues(0.dp)) {
-                        Text("Full stem", fontSize = 13.sp)
-                    }
-                } else {
-                    Text(rich(q.question), Modifier.padding(top = 18.dp), fontSize = 20.sp, lineHeight = 30.sp, fontWeight = FontWeight.SemiBold)
-                    TextButton({ showFull = false }, contentPadding = PaddingValues(0.dp)) {
-                        Text("Short stem", fontSize = 13.sp)
-                    }
-                }
                 if (q.images.isNotEmpty()) QuestionImages(q.images)
                 if (!hasKnownAnswer && q.bookId < 0) { Card(Modifier.padding(top=14.dp).fillMaxWidth(),colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.errorContainer)){Column(Modifier.padding(14.dp)){Text("No verified answer",fontWeight=FontWeight.Black);Text("Optional AI may be inaccurate. Nothing is sent unless you tap below.");Button({vm.requestAiAnswer(q)},enabled=vm.aiWorkingQuestionId==null,modifier=Modifier.padding(top=8.dp)){Text(if(vm.aiWorkingQuestionId==q.id)"Requesting…" else "Ask OpenRouter for this question")};vm.aiMessage?.let{Text(it,Modifier.padding(top=6.dp))}}} }
                 if(q.aiGenerated) Text("AI-generated — verify medically${q.aiConfidence?.let{" • confidence ${(it*100).toInt()}%"}?:""}",Modifier.padding(top=10.dp),color=MaterialTheme.colorScheme.error,fontWeight=FontWeight.Bold)
